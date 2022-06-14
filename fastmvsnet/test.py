@@ -4,6 +4,10 @@ import os.path as osp
 import logging
 import time
 import sys
+
+import cv2
+import numpy
+
 sys.path.insert(0, osp.dirname(__file__) + '/..')
 
 import torch
@@ -24,7 +28,7 @@ def parse_args():
     parser.add_argument(
         "--cfg",
         dest="config_file",
-        default="",
+        default="../configs/dtu.yaml",
         metavar="FILE",
         help="path to config file",
         type=str,
@@ -66,8 +70,21 @@ def test_model(model,
             path_list.extend(curr_ref_img_path)
             if not isCPU:
                 data_batch = {k: v.cuda(non_blocking=True) for k, v in data_batch.items() if isinstance(v, torch.Tensor)}
-            preds = model(data_batch, image_scales, inter_scales, isGN=True, isTest=True)
-
+            preds = model(data_batch=data_batch, img_scales=image_scales, inter_scales=inter_scales, isGN=True, isTest=True)
+            for key in preds.keys():
+                #if key == 'world_points':
+                #     continue
+                if key != 'flow2':
+                    continue
+                tmp = preds[key][0,0].cpu().numpy()
+                #tmp = 1.0 / tmp
+                maxn = numpy.max(tmp)#1.6
+                minn = numpy.min(tmp)#1.0
+                tmp = (tmp - minn) / (maxn - minn) * 255.0
+                tmp = tmp.astype('uint8')
+                tmp = cv2.applyColorMap(tmp, cv2.COLORMAP_RAINBOW)
+                cv2.imshow(key, tmp)
+                cv2.waitKey()
             batch_time = time.time() - end
             end = time.time()
             meters.update(time=batch_time, data=data_time)

@@ -1,3 +1,5 @@
+import time
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -148,6 +150,8 @@ class FeatureGradFetcher(nn.Module):
         return pts_feature, pts_feature_grad
 
     def get_result(self,  feature_maps, pts, cam_intrinsics, cam_extrinsics):
+        torch.cuda.synchronize()
+        begin_t = time.time()
         batch_size, num_view, channels, height, width = list(feature_maps.size())
         feature_maps = feature_maps.view(batch_size * num_view, channels, height, width)
 
@@ -187,6 +191,10 @@ class FeatureGradFetcher(nn.Module):
             return pts_feature.detach()
 
         pts_feature = get_features(grid)
+        torch.cuda.synchronize()
+        print('    warping: ', time.time() - begin_t)
+        torch.cuda.synchronize()
+        begin_t = time.time()
 
         # todo check bug
         grid[..., 0] -= (1. / float(width - 1)) * 2
@@ -209,6 +217,8 @@ class FeatureGradFetcher(nn.Module):
         pts_feature_r *= 0.5
         pts_feature_b -= pts_feature_t
         pts_feature_b *= 0.5
+        torch.cuda.synchronize()
+        print('    d_uv: ', time.time() - begin_t)
 
         return pts_feature.detach(), pts_feature_r.detach(), pts_feature_b.detach()
 
@@ -225,9 +235,12 @@ class FeatureGradFetcher(nn.Module):
         with torch.no_grad():
             pts_feature, grad_x, grad_y = \
                 self.get_result(feature_maps, pts, cam_intrinsics, cam_extrinsics)
+        torch.cuda.synchronize()
+        begin_t = time.time()
         torch.cuda.empty_cache()
         pts_feature_grad = torch.stack((grad_x, grad_y), dim=-1)
-
+        torch.cuda.synchronize()
+        print('    stack: ', time.time() - begin_t)
         return pts_feature.detach(), pts_feature_grad.detach()
 
 

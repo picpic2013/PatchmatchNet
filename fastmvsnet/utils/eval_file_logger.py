@@ -22,6 +22,7 @@ def eval_file_logger(data_batch, preds, ref_img_path, folder, scene_name_index=-
         print("**** {} ****".format(scene))
 
     out_index = int(l[-1][5:8]) - out_index_minus
+    print('\n' + str(out_index) + '\n')
 
     cam_params_list = data_batch["cam_params_list"].cpu().numpy()
 

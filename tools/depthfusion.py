@@ -12,6 +12,7 @@ import os.path as osp
 from struct import *
 import sys
 import os
+import open3d as o3d
 
 sys.path.append("/root/projects/FastMVSNet")
 from fastmvsnet.utils.io import *
@@ -229,17 +230,26 @@ def depth_map_fusion(point_folder, fusibile_exe_path, disp_thresh, num_consisten
 if __name__ == '__main__':
 
     parser = argparse.ArgumentParser()
+    # parser.add_argument('--eval_folder', type=str,
+    #                     default='/data/FastMVSNet/talking/')
     parser.add_argument('--eval_folder', type=str,
-                        default='data/dtu/Eval/')
-    parser.add_argument('--fusibile_exe_path', type=str, default='/root/projects/fusibile/fusibile')
-    parser.add_argument('--init_prob_threshold', type=float, default=0.2)
+                        default='/data/FastMVSNet/lab/')
+    # parser.add_argument('--eval_folder', type=str,
+    #                     default='/data/FastMVSNet/SampleSet/MVS_Data/')
+    parser.add_argument('--fusibile_exe_path', type=str, default='/home/wjk/workspace/PyProject/fusibile/fusibile')
+    parser.add_argument('--init_prob_threshold', type=float, default=0.05) # larger -> more strict
     parser.add_argument('--flow_prob_threshold', type=float, default=0.1)
-    parser.add_argument('--disp_threshold', type=float, default=0.12)
-    parser.add_argument('--num_consistent', type=int, default=3)
-    parser.add_argument("-v", '--view_num', type=int, default=49)
-    parser.add_argument("-n", '--name', type=str)
+    parser.add_argument('--disp_threshold', type=float, default=0.80)
+    parser.add_argument('--num_consistent', type=int, default=2)
+    # parser.add_argument("-v", '--view_num', type=int, default=49)
+    parser.add_argument("-v", '--view_num', type=int, default=5)
+    parser.add_argument("-n", '--name', type=str, default='flow3')
     parser.add_argument("-m", '--inter_mode', type=str, default='LANCZOS4')
-    parser.add_argument("-f", '--depth_folder', type=str)
+    # parser.add_argument("-f", '--depth_folder', type=str, default='talking')
+    # parser.add_argument("-f", '--depth_folder', type=str, default='lab')
+    #parser.add_argument("-f", '--depth_folder', type=str, default='lab_fore')
+    parser.add_argument("-f", '--depth_folder', type=str, default='lab_crop')
+    # parser.add_argument("-f", '--depth_folder', type=str, default='dtu')
     args = parser.parse_args()
 
     eval_folder = args.eval_folder
@@ -269,9 +279,10 @@ if __name__ == '__main__':
                                             disp_threshold, num_consistent))
     mkdir(out_point_folder)
 
-    scene_list = ["scan1", "scan4", "scan9", "scan10", "scan11", "scan12", "scan13", "scan15", "scan23",
-                  "scan24", "scan29", "scan32", "scan33", "scan34", "scan48", "scan49", "scan62", "scan75",
-                  "scan77", "scan110", "scan114", "scan118"]
+    # scene_list = ["scan1", "scan4", "scan9", "scan10", "scan11", "scan12", "scan13", "scan15", "scan23",
+    #               "scan24", "scan29", "scan32", "scan33", "scan34", "scan48", "scan49", "scan62", "scan75",
+    #               "scan77", "scan110", "scan114", "scan118"]
+    scene_list = ["scan1"]
 
     for scene in scene_list:
         scene_folder = osp.join(eval_folder, DEPTH_FOLDER, scene)
@@ -311,3 +322,7 @@ if __name__ == '__main__':
         remove_cmd = "rm -r " + point_folder
         print(remove_cmd)
         os.system(remove_cmd)
+
+        pcd_path = '{}/{}_ip{}_fp{}_d{}_nc{}_{}.ply'.format(out_point_folder, scene, init_prob_threshold, flow_prob_threshold, disp_threshold, num_consistent,args.inter_mode)
+        pcd = o3d.io.read_point_cloud(pcd_path)
+        o3d.visualization.draw_geometries([pcd])

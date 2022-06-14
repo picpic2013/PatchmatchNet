@@ -155,8 +155,9 @@ class DTU_Train_Val_Set(Dataset):
 
 
 class DTU_Test_Set(Dataset):
-    test_set = [1, 4, 9, 10, 11, 12, 13, 15, 23, 24, 29, 32, 33, 34, 48, 49, 62, 75, 77,
-                110, 114, 118]
+    # test_set = [1, 4, 9, 10, 11, 12, 13, 15, 23, 24, 29, 32, 33, 34, 48, 49, 62, 75, 77,
+    #             110, 114, 118]
+    test_set = [1]
     test_lighting_set = [3]
 
     mean = torch.tensor([1.97145182, -1.52387525, 651.07223895])
@@ -194,7 +195,7 @@ class DTU_Test_Set(Dataset):
     def _load_dataset(self, dataset, lighting_set):
         path_list = []
         for ind in dataset:
-            image_folder = osp.join(self.root_dir, "Eval/Rectified/scan{}".format(ind))
+            image_folder = osp.join(self.root_dir, "Rectified/scan{}".format(ind))
             cam_folder = osp.join(self.root_dir, "Cameras")
             depth_folder = osp.join(self.depth_folder, "scan{}".format(ind))
 
@@ -208,7 +209,8 @@ class DTU_Test_Set(Dataset):
                     view_depth_paths = []
 
                     # ref image
-                    ref_index = int(self.cluster_list[22 * p + 1])
+                    # ref_index = int(self.cluster_list[22 * p + 1])
+                    ref_index = int(self.cluster_list[10 * p + 1])
                     ref_image_path = osp.join(
                         image_folder, "rect_{:03d}_{}_r5000.png".format(ref_index + 1, lighting_ind))
                     ref_cam_path = osp.join(cam_folder, "{:08d}_cam.txt".format(ref_index))
@@ -220,7 +222,8 @@ class DTU_Test_Set(Dataset):
 
                     # view images
                     for view in range(self.num_view - 1):
-                        view_index = int(self.cluster_list[22 * p + 2 * view + 3])
+                        # view_index = int(self.cluster_list[22 * p + 2 * view + 3])
+                        view_index = int(self.cluster_list[10 * p + 2 * view + 3])
                         view_image_path = osp.join(
                             image_folder, "rect_{:03d}_{}_r5000.png".format(view_index + 1, lighting_ind))
                         view_cam_path = osp.join(cam_folder, "{:08d}_cam.txt".format(view_index))
@@ -287,6 +290,8 @@ class DTU_Test_Set(Dataset):
         ref_image = croped_images[0].copy()
         for i, image in enumerate(croped_images):
             croped_images[i] = norm_image(image)
+        # for i, image in enumerate(croped_images):
+        #     croped_images[i] = image / 255.0
 
         depth_list = np.stack(depth_images, axis=0)
         img_list = np.stack(croped_images, axis=0)

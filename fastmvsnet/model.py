@@ -1,9 +1,15 @@
+import time
+
+import cv2
 import numpy as np
 import collections
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import sys
+sys.path.append('/home/wjk/workspace/PyProject/FastMVSNet/fastmvsnet')
+from picutils import PICTimer
 
 from fastmvsnet.networks import *
 from fastmvsnet.functions.functions import get_pixel_grids, get_propability_map
@@ -50,207 +56,287 @@ class FastMVSNet(nn.Module):
         depth_end = depth_start + (num_depth - 1) * depth_interval
 
         batch_size, num_view, img_channel, img_height, img_width = list(img_list.size())
-
         coarse_feature_maps = []
-        for i in range(num_view):
-            curr_img = img_list[:, i, :, :, :]
-            curr_feature_map = self.coarse_img_conv(curr_img)["conv2"]
-            coarse_feature_maps.append(curr_feature_map)
-
-        feature_list = torch.stack(coarse_feature_maps, dim=1)
-
-        feature_channels, feature_height, feature_width = list(curr_feature_map.size())[1:]
-
-        depths = []
-        for i in range(batch_size):
-            depths.append(torch.linspace(depth_start[i], depth_end[i], num_depth, device=img_list.device) \
-                          .view(1, 1, num_depth, 1))
-        depths = torch.stack(depths, dim=0)  # (B, 1, 1, D, 1)
-
-        feature_map_indices_grid = get_pixel_grids(feature_height, feature_width)
-        # print("before:", feature_map_indices_grid.size())
-        feature_map_indices_grid = feature_map_indices_grid.view(1, 3, feature_height, feature_width)[:, :, ::2, ::2].contiguous()
-        # print("after:", feature_map_indices_grid.size())
-        feature_map_indices_grid = feature_map_indices_grid.view(1, 1, 3, -1).expand(batch_size, 1, 3, -1).to(img_list.device)
-
-        ref_cam_intrinsic = cam_intrinsic[:, 0, :, :].clone()
-        uv = torch.matmul(torch.inverse(ref_cam_intrinsic).unsqueeze(1), feature_map_indices_grid)  # (B, 1, 3, FH*FW)
-
-        cam_points = (uv.unsqueeze(3) * depths).view(batch_size, 1, 3, -1)  # (B, 1, 3, D*FH*FW)
-        world_points = torch.matmul(R_inv[:, 0:1, :, :], cam_points - t[:, 0:1, :, :]).transpose(1, 2).contiguous() \
-            .view(batch_size, 3, -1)  # (B, 3, D*FH*FW)
-
-        preds["world_points"] = world_points
-
-        num_world_points = world_points.size(-1)
-        assert num_world_points == feature_height * feature_width * num_depth / 4
-
-        point_features = self.feature_fetcher(feature_list, world_points, cam_intrinsic, cam_extrinsic)
-        ref_feature = coarse_feature_maps[0]
-        #print("before ref feature:", ref_feature.size())
-        ref_feature = ref_feature[:, :, ::2,::2].contiguous()
-        #print("after ref feature:", ref_feature.size())
-        ref_feature = ref_feature.unsqueeze(2).expand(-1, -1, num_depth, -1, -1)\
-                        .contiguous().view(batch_size,feature_channels,-1)
-        point_features[:, 0, :, :] = ref_feature
-
-        avg_point_features = torch.mean(point_features, dim=1)
-        avg_point_features_2 = torch.mean(point_features ** 2, dim=1)
-
-        point_features = avg_point_features_2 - (avg_point_features ** 2)
-
-        cost_volume = point_features.view(batch_size, feature_channels, num_depth, feature_height // 2, feature_width // 2)
-
-        filtered_cost_volume = self.coarse_vol_conv(cost_volume).squeeze(1)
-
-        probability_volume = F.softmax(-filtered_cost_volume, dim=1)
-        depth_volume = []
-        for i in range(batch_size):
-            depth_array = torch.linspace(depth_start[i], depth_end[i], num_depth, device=depth_start.device)
-            depth_volume.append(depth_array)
-        depth_volume = torch.stack(depth_volume, dim=0)  # (B, D)
-        depth_volume = depth_volume.view(batch_size, num_depth, 1, 1).expand(probability_volume.shape)
-        pred_depth_img = torch.sum(depth_volume * probability_volume, dim=1).unsqueeze(1)  # (B, 1, FH, FW)
-
-        prob_map = get_propability_map(probability_volume, pred_depth_img, depth_start, depth_interval)
-
-        # image guided depth map propagation
-        pred_depth_img = F.interpolate(pred_depth_img, (feature_height, feature_width), mode="nearest")
-        prob_map = F.interpolate(prob_map, (feature_height, feature_width), mode="bilinear")
-        pred_depth_img = self.propagation_net(pred_depth_img, img_list[:, 0, :, :, :])
-
-        preds["coarse_depth_map"] = pred_depth_img
-        preds["coarse_prob_map"] = prob_map
-
-        if isGN:
-            feature_pyramids = {}
-            chosen_conv = ["conv1", "conv2"]
-            for conv in chosen_conv:
-                feature_pyramids[conv] = []
+        torch.cuda.synchronize()
+        with PICTimer.getTimer() as timer:
+            # begin_feature = time.time()
             for i in range(num_view):
                 curr_img = img_list[:, i, :, :, :]
-                curr_feature_pyramid = self.flow_img_conv(curr_img)
+                # img_tmp = curr_img[0].permute([1,2,0]).cpu().numpy()
+                # minn = np.min(img_tmp)
+                # maxn = np.max(img_tmp)
+                # img_tmp = (img_tmp - minn) / (maxn - minn)
+                # # img_tmp = img_tmp * 255.0
+                # # img_tmp = img_tmp.astype('uint8')
+                # cv2.imshow('color', img_tmp)
+                # cv2.waitKey()
+                curr_feature_map = self.coarse_img_conv(curr_img)["conv2"]
+                # torch.save(self.coarse_img_conv.state_dict(), 'img_conv_param.pkl')
+                coarse_feature_maps.append(curr_feature_map)
+            torch.cuda.synchronize()
+            # print('feature:{}'.format(time.time() - begin_feature))
+            timer.showTime('feature')
+            torch.cuda.synchronize()
+            # begin_warping = time.time()
+            feature_list = torch.stack(coarse_feature_maps, dim=1)
+
+            feature_channels, feature_height, feature_width = list(curr_feature_map.size())[1:]
+
+            depths = []
+            for i in range(batch_size):
+                depths.append(torch.linspace(depth_start[i], depth_end[i], num_depth, device=img_list.device) \
+                              .view(1, 1, num_depth, 1))
+                # depths.append((1 / torch.linspace(1 / depth_start[i], 1 / depth_end[i], num_depth, device=img_list.device)) \
+                #               .view(1, 1, num_depth, 1))
+            depths = torch.stack(depths, dim=0)  # (B, 1, 1, D, 1)
+
+            feature_map_indices_grid = get_pixel_grids(feature_height, feature_width)
+            # print("before:", feature_map_indices_grid.size())
+            feature_map_indices_grid = feature_map_indices_grid.view(1, 3, feature_height, feature_width)[:, :, ::2, ::2].contiguous()
+            # print("after:", feature_map_indices_grid.size())
+            feature_map_indices_grid = feature_map_indices_grid.view(1, 1, 3, -1).expand(batch_size, 1, 3, -1).to(img_list.device)
+
+            ref_cam_intrinsic = cam_intrinsic[:, 0, :, :].clone()
+            uv = torch.matmul(torch.inverse(ref_cam_intrinsic).unsqueeze(1), feature_map_indices_grid)  # (B, 1, 3, FH*FW)
+
+            cam_points = (uv.unsqueeze(3) * depths).view(batch_size, 1, 3, -1)  # (B, 1, 3, D*FH*FW)
+            world_points = torch.matmul(R_inv[:, 0:1, :, :], cam_points - t[:, 0:1, :, :]).transpose(1, 2).contiguous() \
+                .view(batch_size, 3, -1)  # (B, 3, D*FH*FW)
+
+            preds["world_points"] = world_points
+
+            num_world_points = world_points.size(-1)
+            assert num_world_points == feature_height * feature_width * num_depth / 4
+
+            point_features = self.feature_fetcher(feature_list, world_points, cam_intrinsic, cam_extrinsic)
+            ref_feature = coarse_feature_maps[0]
+            #print("before ref feature:", ref_feature.size())
+            ref_feature = ref_feature[:, :, ::2,::2].contiguous()
+            #print("after ref feature:", ref_feature.size())
+            ref_feature = ref_feature.unsqueeze(2).expand(-1, -1, num_depth, -1, -1)\
+                            .contiguous().view(batch_size,feature_channels,-1)
+            point_features[:, 0, :, :] = ref_feature
+
+            avg_point_features = torch.mean(point_features, dim=1)
+            avg_point_features_2 = torch.mean(point_features ** 2, dim=1)
+
+            point_features = avg_point_features_2 - (avg_point_features ** 2)
+
+            cost_volume = point_features.view(batch_size, feature_channels, num_depth, feature_height // 2, feature_width // 2)
+
+            torch.cuda.synchronize()
+            timer.showTime('warping')
+            # print('warping:{}'.format(time.time() - begin_warping))
+            torch.cuda.synchronize()
+            # begin_regression = time.time()
+            filtered_cost_volume = self.coarse_vol_conv(cost_volume).squeeze(1)
+
+            probability_volume = F.softmax(-filtered_cost_volume, dim=1)
+            depth_volume = []
+            for i in range(batch_size):
+                depth_array = torch.linspace(depth_start[i], depth_end[i], num_depth, device=depth_start.device)
+                depth_volume.append(depth_array)
+            depth_volume = torch.stack(depth_volume, dim=0)  # (B, D)
+            depth_volume = depth_volume.view(batch_size, num_depth, 1, 1).expand(probability_volume.shape)
+            pred_depth_img = torch.sum(depth_volume * probability_volume, dim=1).unsqueeze(1)  # (B, 1, FH, FW)
+            preds["raw_depth_map"] = pred_depth_img
+            prob_map = get_propability_map(probability_volume, pred_depth_img, depth_start, depth_interval)
+            torch.cuda.synchronize()
+            timer.showTime('regression')
+            # print('regression:{}'.format(time.time() - begin_regression))
+            torch.cuda.synchronize()
+            # begin_propagation = time.time()
+            # image guided depth map propagation
+            pred_depth_img = F.interpolate(pred_depth_img, (feature_height, feature_width), mode="nearest")
+            preds["interpolate_depth_map"] = pred_depth_img
+            prob_map = F.interpolate(prob_map, (feature_height, feature_width), mode="bilinear")
+            pred_depth_img = self.propagation_net(pred_depth_img, img_list[:, 0, :, :, :])
+
+            preds["coarse_depth_map"] = pred_depth_img
+            preds["coarse_prob_map"] = prob_map
+            torch.cuda.synchronize()
+            timer.showTime('propagation')
+            # print('propagation:{}'.format(time.time() - begin_propagation))
+
+            if isGN:
+                feature_pyramids = {}
+                chosen_conv = ["conv1", "conv2"]
                 for conv in chosen_conv:
-                    feature_pyramids[conv].append(curr_feature_pyramid[conv])
+                    feature_pyramids[conv] = []
+                for i in range(num_view):
+                    curr_img = img_list[:, i, :, :, :]
+                    curr_feature_pyramid = self.flow_img_conv(curr_img)
+                    for conv in chosen_conv:
+                        feature_pyramids[conv].append(curr_feature_pyramid[conv])
 
-            for conv in chosen_conv:
-                feature_pyramids[conv] = torch.stack(feature_pyramids[conv], dim=1)
-
-            if isTest:
                 for conv in chosen_conv:
-                    feature_pyramids[conv] = torch.detach(feature_pyramids[conv])
-
-
-            def gn_update(estimated_depth_map, interval, image_scale, it):
-                nonlocal chosen_conv
-                # print(estimated_depth_map.size(), image_scale)
-                flow_height, flow_width = list(estimated_depth_map.size())[2:]
-                if flow_height != int(img_height * image_scale):
-                    flow_height = int(img_height * image_scale)
-                    flow_width = int(img_width * image_scale)
-                    estimated_depth_map = F.interpolate(estimated_depth_map, (flow_height, flow_width), mode="nearest")
-                else:
-                    # if it is the same size return directly
-                    return estimated_depth_map
-                    # pass
-                
-                if isTest:
-                    estimated_depth_map = estimated_depth_map.detach()
-
-                # GN step
-                cam_intrinsic = cam_params_list[:, :, 1, :3, :3].clone()
-                if isTest:
-                    cam_intrinsic[:, :, :2, :3] *= image_scale
-                else:
-                    cam_intrinsic[:, :, :2, :3] *= (4 * image_scale)
-
-                ref_cam_intrinsic = cam_intrinsic[:, 0, :, :].clone()
-                feature_map_indices_grid = get_pixel_grids(flow_height, flow_width) \
-                    .view(1, 1, 3, -1).expand(batch_size, 1, 3, -1).to(img_list.device)
-
-                uv = torch.matmul(torch.inverse(ref_cam_intrinsic).unsqueeze(1),
-                                  feature_map_indices_grid)  # (B, 1, 3, FH*FW)
-
-                interval_depth_map = estimated_depth_map
-                cam_points = (uv * interval_depth_map.view(batch_size, 1, 1, -1))
-                world_points = torch.matmul(R_inv[:, 0:1, :, :], cam_points - t[:, 0:1, :, :]).transpose(1, 2) \
-                    .contiguous().view(batch_size, 3, -1)  # (B, 3, D*FH*FW)
-
-                grad_pts = self.point_grad_fetcher(world_points, cam_intrinsic, cam_extrinsic)
-
-                R_tar_ref = torch.bmm(R.view(batch_size * num_view, 3, 3),
-                                      R_inv[:, 0:1, :, :].repeat(1, num_view, 1, 1).view(batch_size * num_view, 3, 3))
-
-                R_tar_ref = R_tar_ref.view(batch_size, num_view, 3, 3)
-                d_pts_d_d = uv.unsqueeze(-1).permute(0, 1, 3, 2, 4).contiguous().repeat(1, num_view, 1, 1, 1)
-                d_pts_d_d = R_tar_ref.unsqueeze(2) @ d_pts_d_d
-                d_uv_d_d = torch.bmm(grad_pts.view(-1, 2, 3), d_pts_d_d.view(-1, 3, 1)).view(batch_size, num_view, 1,
-                                                                                             -1, 2, 1)
-                all_features = []
-                for conv in chosen_conv:
-                    curr_feature = feature_pyramids[conv]
-                    c, h, w = list(curr_feature.size())[2:]
-                    curr_feature = curr_feature.contiguous().view(-1, c, h, w)
-                    curr_feature = F.interpolate(curr_feature, (flow_height, flow_width), mode="bilinear")
-                    curr_feature = curr_feature.contiguous().view(batch_size, num_view, c, flow_height, flow_width)
-
-                    all_features.append(curr_feature)
-
-                all_features = torch.cat(all_features, dim=2)
+                    feature_pyramids[conv] = torch.stack(feature_pyramids[conv], dim=1)
 
                 if isTest:
-                    point_features, point_features_grad = \
-                        self.feature_grad_fetcher.test_forward(all_features, world_points, cam_intrinsic, cam_extrinsic)
-                else:
-                    point_features, point_features_grad = \
-                        self.feature_grad_fetcher(all_features, world_points, cam_intrinsic, cam_extrinsic)
+                    for conv in chosen_conv:
+                        feature_pyramids[conv] = torch.detach(feature_pyramids[conv])
 
-                c = all_features.size(2)
-                d_uv_d_d_tmp = d_uv_d_d.repeat(1, 1, c, 1, 1, 1)
-                # print("d_uv_d_d tmp size:", d_uv_d_d_tmp.size())
-                J = point_features_grad.view(-1, 1, 2) @ d_uv_d_d_tmp.view(-1, 2, 1)
-                J = J.view(batch_size, num_view, c, -1, 1)[:, 1:, ...].contiguous()\
-                    .permute(0, 3, 1, 2, 4).contiguous().view(-1, c * (num_view - 1), 1)
 
-                # print(J.size())
-                resid = point_features[:, 1:, ...] - point_features[:, 0:1, ...]
-                first_resid = torch.sum(torch.abs(resid), dim=(1, 2))
-                # print(resid.size())
-                resid = resid.permute(0, 3, 1, 2).contiguous().view(-1, c * (num_view - 1), 1)
+                def gn_update(estimated_depth_map, interval, image_scale, it):
+                    nonlocal chosen_conv
+                    # print(estimated_depth_map.size(), image_scale)
+                    torch.cuda.synchronize()
+                    begin = time.time()
+                    flow_height, flow_width = list(estimated_depth_map.size())[2:]
+                    if flow_height != int(img_height * image_scale):
+                        flow_height = int(img_height * image_scale)
+                        flow_width = int(img_width * image_scale)
+                        estimated_depth_map = F.interpolate(estimated_depth_map, (flow_height, flow_width), mode="nearest")
+                    else:
+                        # if it is the same size return directly
+                        #return estimated_depth_map
+                        pass
 
-                J_t = torch.transpose(J, 1, 2)
-                H = J_t @ J
-                b = -J_t @ resid
-                delta = b / (H + 1e-6)
-                # #print(delta.size())
-                _, _, h, w = estimated_depth_map.size()
-                flow_result = estimated_depth_map  + delta.view(-1, 1, h, w)
+                    if isTest:
+                        estimated_depth_map = estimated_depth_map.detach()
+                    torch.cuda.synchronize()
+                    print('resize: ', time.time() - begin)
+                    torch.cuda.synchronize()
+                    begin = time.time()
+                    # GN step
+                    cam_intrinsic = cam_params_list[:, :, 1, :3, :3].clone()
+                    if isTest:
+                        cam_intrinsic[:, :, :2, :3] *= image_scale
+                    else:
+                        cam_intrinsic[:, :, :2, :3] *= (4 * image_scale)
 
-                # check update results
-                interval_depth_map = flow_result
-                cam_points = (uv * interval_depth_map.view(batch_size, 1, 1, -1))
-                world_points = torch.matmul(R_inv[:, 0:1, :, :], cam_points - t[:, 0:1, :, :]).transpose(1, 2) \
-                    .contiguous().view(batch_size, 3, -1)  # (B, 3, D*FH*FW)
+                    ref_cam_intrinsic = cam_intrinsic[:, 0, :, :].clone()
+                    feature_map_indices_grid = get_pixel_grids(flow_height, flow_width) \
+                        .view(1, 1, 3, -1).expand(batch_size, 1, 3, -1).to(img_list.device)
 
-                point_features = \
-                    self.feature_fetcher(all_features, world_points, cam_intrinsic, cam_extrinsic)
+                    uv = torch.matmul(torch.inverse(ref_cam_intrinsic).unsqueeze(1),
+                                      feature_map_indices_grid)  # (B, 1, 3, FH*FW)
 
-                resid = point_features[:, 1:, ...] - point_features[:, 0:1, ...]
-                second_resid = torch.sum(torch.abs(resid), dim=(1, 2))
-                # print(first_resid.size(), second_resid.size())
+                    interval_depth_map = estimated_depth_map
+                    cam_points = (uv * interval_depth_map.view(batch_size, 1, 1, -1))
+                    world_points = torch.matmul(R_inv[:, 0:1, :, :], cam_points - t[:, 0:1, :, :]).transpose(1, 2) \
+                        .contiguous().view(batch_size, 3, -1)  # (B, 3, D*FH*FW)
 
-                # only accept good update
-                flow_result = torch.where((second_resid < first_resid).view(batch_size, 1, flow_height, flow_width),
-                                          flow_result, estimated_depth_map)
-                return flow_result
+                    torch.cuda.synchronize()
+                    begin_g = time.time()
+                    grad_pts = self.point_grad_fetcher(world_points, cam_intrinsic, cam_extrinsic)
+                    torch.cuda.synchronize()
+                    print('    d_d: ', time.time() - begin_g)
 
-            for i, (img_scale, inter_scale) in enumerate(zip(img_scales, inter_scales)):
-                if isTest:
-                    pred_depth_img = torch.detach(pred_depth_img)
-                    print("update: {}".format(i))
-                flow = gn_update(pred_depth_img, inter_scale* depth_interval, img_scale, i)
-                preds["flow{}".format(i+1)] = flow
-                pred_depth_img = flow
+                    R_tar_ref = torch.bmm(R.view(batch_size * num_view, 3, 3),
+                                          R_inv[:, 0:1, :, :].repeat(1, num_view, 1, 1).view(batch_size * num_view, 3, 3))
+
+                    R_tar_ref = R_tar_ref.view(batch_size, num_view, 3, 3)
+                    d_pts_d_d = uv.unsqueeze(-1).permute(0, 1, 3, 2, 4).contiguous().repeat(1, num_view, 1, 1, 1)
+                    d_pts_d_d = R_tar_ref.unsqueeze(2) @ d_pts_d_d
+                    d_uv_d_d = torch.bmm(grad_pts.view(-1, 2, 3), d_pts_d_d.view(-1, 3, 1)).view(batch_size, num_view, 1,
+                                                                                                 -1, 2, 1)
+                    torch.cuda.synchronize()
+                    print('mapping: ', time.time() - begin)
+                    torch.cuda.synchronize()
+                    begin = time.time()
+                    all_features = []
+                    for conv in chosen_conv:
+                        curr_feature = feature_pyramids[conv]
+                        c, h, w = list(curr_feature.size())[2:]
+                        curr_feature = curr_feature.contiguous().view(-1, c, h, w)
+                        curr_feature = F.interpolate(curr_feature, (flow_height, flow_width), mode="bilinear")
+                        curr_feature = curr_feature.contiguous().view(batch_size, num_view, c, flow_height, flow_width)
+
+                        all_features.append(curr_feature)
+
+                    all_features = torch.cat(all_features, dim=2)
+                    torch.cuda.synchronize()
+                    print('feature resize: ', time.time() - begin)
+                    torch.cuda.synchronize()
+                    begin = time.time()
+                    if isTest:
+                        point_features, point_features_grad = \
+                            self.feature_grad_fetcher.test_forward(all_features, world_points, cam_intrinsic, cam_extrinsic)
+                    else:
+                        point_features, point_features_grad = \
+                            self.feature_grad_fetcher(all_features, world_points, cam_intrinsic, cam_extrinsic)
+                    torch.cuda.synchronize()
+                    print('warping: ', time.time() - begin)
+                    c = all_features.size(2)
+                    d_uv_d_d_tmp = d_uv_d_d.repeat(1, 1, c, 1, 1, 1)
+                    # print("d_uv_d_d tmp size:", d_uv_d_d_tmp.size())
+                    torch.cuda.synchronize()
+                    begin = time.time()
+                    J = point_features_grad.view(-1, 1, 2) @ d_uv_d_d_tmp.view(-1, 2, 1)
+                    J = J.view(batch_size, num_view, c, -1, 1)[:, 1:, ...].contiguous()\
+                        .permute(0, 3, 1, 2, 4).contiguous().view(-1, c * (num_view - 1), 1)
+                    # print(J.size())
+                    torch.cuda.synchronize()
+                    print('    jacobi: ', time.time() - begin)
+                    torch.cuda.synchronize()
+                    begin = time.time()
+                    resid = point_features[:, 1:, ...] - point_features[:, 0:1, ...]
+                    first_resid = torch.sum(torch.abs(resid), dim=(1, 2))
+                    # print(resid.size())
+                    resid = resid.permute(0, 3, 1, 2).contiguous().view(-1, c * (num_view - 1), 1)
+                    torch.cuda.synchronize()
+                    print('    res: ', time.time() - begin)
+                    torch.cuda.synchronize()
+                    begin = time.time()
+                    J_t = torch.transpose(J, 1, 2)
+                    H = J_t @ J
+                    b = -J_t @ resid
+                    delta = b / (H + 1e-6)
+                    torch.cuda.synchronize()
+                    print('    delta: ', time.time() - begin)
+                    torch.cuda.synchronize()
+                    begin = time.time()
+                    # #print(delta.size())
+                    _, _, h, w = estimated_depth_map.size()
+
+                    '''####vis grad_map####
+                    grad_map = delta.view(-1, 1, h, w)[0][0]
+                    grad_map = grad_map.cpu().numpy()
+                    gmax, gmin = 0.13, -0.5#np.max(grad_map), np.min(grad_map)
+                    grad_map = (grad_map - gmin) / (gmax - gmin) * 255.0
+                    grad_map = grad_map.astype('uint8')
+                    cv2.imshow("grad", grad_map)
+                    cv2.waitKey()'''
+                    flow_result = estimated_depth_map + delta.view(-1, 1, h, w)
+                    torch.cuda.synchronize()
+                    print('    update: ', time.time() - begin)
+                    torch.cuda.synchronize()
+                    begin = time.time()
+                    # check update results
+                    interval_depth_map = flow_result
+                    cam_points = (uv * interval_depth_map.view(batch_size, 1, 1, -1))
+                    world_points = torch.matmul(R_inv[:, 0:1, :, :], cam_points - t[:, 0:1, :, :]).transpose(1, 2) \
+                        .contiguous().view(batch_size, 3, -1)  # (B, 3, D*FH*FW)
+
+                    point_features = \
+                        self.feature_fetcher(all_features, world_points, cam_intrinsic, cam_extrinsic)
+
+                    resid = point_features[:, 1:, ...] - point_features[:, 0:1, ...]
+                    second_resid = torch.sum(torch.abs(resid), dim=(1, 2))
+                    # print(first_resid.size(), second_resid.size())
+                    torch.cuda.synchronize()
+                    print('GN: ', time.time() - begin)
+                    torch.cuda.synchronize()
+                    begin = time.time()
+                    # only accept good update
+                    flow_result = torch.where((second_resid < first_resid).view(batch_size, 1, flow_height, flow_width),
+                                              flow_result, estimated_depth_map)
+                    torch.cuda.synchronize()
+                    print('refine: ', time.time() - begin)
+                    return flow_result
+
+                for i, (img_scale, inter_scale) in enumerate(zip(img_scales, inter_scales)):
+                    if isTest:
+                        pred_depth_img = torch.detach(pred_depth_img)
+                        print("update: {}".format(i))
+                    torch.cuda.synchronize()
+                    begin_time = time.time()
+                    flow = gn_update(pred_depth_img, inter_scale* depth_interval, img_scale, i)
+                    torch.cuda.synchronize()
+                    print(img_scale, ' : ', time.time() - begin_time)
+                    preds["flow{}".format(i+1)] = flow
+                    pred_depth_img = flow
 
         return preds
 
