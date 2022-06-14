@@ -83,8 +83,8 @@ def test_model(model,
                 tmp = (tmp - minn) / (maxn - minn) * 255.0
                 tmp = tmp.astype('uint8')
                 tmp = cv2.applyColorMap(tmp, cv2.COLORMAP_RAINBOW)
-                cv2.imshow(key, tmp)
-                cv2.waitKey()
+                # cv2.imshow(key, tmp)
+                # cv2.waitKey()
             batch_time = time.time() - end
             end = time.time()
             meters.update(time=batch_time, data=data_time)
