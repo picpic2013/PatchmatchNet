@@ -4,9 +4,12 @@ import os.path as osp
 import logging
 import time
 import sys
+sys.path.append('/home/pic/downloads/FastMVSNet')
 
 import cv2
 import numpy
+
+from picutils import PICTimer, make_recursive_func
 
 sys.path.insert(0, osp.dirname(__file__) + '/..')
 
@@ -49,6 +52,11 @@ def parse_args():
     args = parser.parse_args()
     return args
 
+@make_recursive_func
+def detachTensor(X):
+    if isinstance(X, torch.Tensor):
+        return X.detach()
+    return X
 
 def test_model(model,
                image_scales,
@@ -63,34 +71,38 @@ def test_model(model,
     end = time.time()
     total_iteration = data_loader.__len__()
     path_list = []
-    with torch.no_grad():
-        for iteration, data_batch in enumerate(data_loader):
-            data_time = time.time() - end
-            curr_ref_img_path = data_batch["ref_img_path"][0]
-            path_list.extend(curr_ref_img_path)
-            if not isCPU:
-                data_batch = {k: v.cuda(non_blocking=True) for k, v in data_batch.items() if isinstance(v, torch.Tensor)}
-            preds = model(data_batch=data_batch, img_scales=image_scales, inter_scales=inter_scales, isGN=True, isTest=True)
-            for key in preds.keys():
-                #if key == 'world_points':
-                #     continue
-                if key != 'flow2':
-                    continue
-                tmp = preds[key][0,0].cpu().numpy()
-                #tmp = 1.0 / tmp
-                maxn = numpy.max(tmp)#1.6
-                minn = numpy.min(tmp)#1.0
-                tmp = (tmp - minn) / (maxn - minn) * 255.0
-                tmp = tmp.astype('uint8')
-                tmp = cv2.applyColorMap(tmp, cv2.COLORMAP_RAINBOW)
-                # cv2.imshow(key, tmp)
-                # cv2.waitKey()
-            batch_time = time.time() - end
-            end = time.time()
-            meters.update(time=batch_time, data=data_time)
-            logger.info(
-                "{} finished.".format(curr_ref_img_path) + str(meters))
-            eval_file_logger(data_batch, preds, curr_ref_img_path, folder)
+    # with torch.no_grad():
+    with torch.autograd.set_detect_anomaly(True):
+        with PICTimer.getTimer():
+            for iteration, data_batch in enumerate(data_loader):
+                data_time = time.time() - end
+                curr_ref_img_path = data_batch["ref_img_path"][0]
+                path_list.extend(curr_ref_img_path)
+                if not isCPU:
+                    data_batch = {k: v.cuda(non_blocking=True) for k, v in data_batch.items() if isinstance(v, torch.Tensor)}
+                preds = model(data_batch=data_batch, img_scales=image_scales, inter_scales=inter_scales, isGN=True, isTest=True)
+                preds = dict(preds)
+                preds = detachTensor(preds)
+                for key in preds.keys():
+                    #if key == 'world_points':
+                    #     continue
+                    if key != 'flow2':
+                        continue
+                    tmp = preds[key][0,0].detach().cpu().numpy()
+                    #tmp = 1.0 / tmp
+                    maxn = numpy.max(tmp)#1.6
+                    minn = numpy.min(tmp)#1.0
+                    tmp = (tmp - minn) / (maxn - minn) * 255.0
+                    tmp = tmp.astype('uint8')
+                    tmp = cv2.applyColorMap(tmp, cv2.COLORMAP_RAINBOW)
+                    # cv2.imshow(key, tmp)
+                    # cv2.waitKey()
+                batch_time = time.time() - end
+                end = time.time()
+                meters.update(time=batch_time, data=data_time)
+                logger.info(
+                    "{} finished.".format(curr_ref_img_path) + str(meters))
+                eval_file_logger(data_batch, preds, curr_ref_img_path, folder)
 
 
 def test(cfg, output_dir, isCPU=False):

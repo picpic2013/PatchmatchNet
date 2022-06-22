@@ -191,11 +191,14 @@ class FeatureGradFetcher(nn.Module):
             pts_feature = pts_feature.squeeze(3)
 
             pts_feature = pts_feature.view(batch_size, num_view, channels, num_pts)
-            return pts_feature.detach()
+            # return pts_feature.detach()
+            return pts_feature
 
         pts_feature = get_features(grid)
         torch.cuda.synchronize()
         timer_warping.showTime('warping')
+
+        grid = grid.detach().clone()
 
         # todo check bug
         grid[..., 0] -= (1. / float(width - 1)) * 2
@@ -220,8 +223,9 @@ class FeatureGradFetcher(nn.Module):
         pts_feature_b *= 0.5
         torch.cuda.synchronize()
         timer_warping.showTime('d_uv')
-        timer_warping.summary()
-        return pts_feature.detach(), pts_feature_r.detach(), pts_feature_b.detach()
+        # timer_warping.summary()
+        # return pts_feature.detach(), pts_feature_r.detach(), pts_feature_b.detach()
+        return pts_feature, pts_feature_r.detach(), pts_feature_b.detach()
 
     def test_forward(self, feature_maps, pts, cam_intrinsics, cam_extrinsics):
         """
@@ -233,7 +237,8 @@ class FeatureGradFetcher(nn.Module):
         :return:
             pts_feature: torch.tensor, [B, V, C, N]
         """
-        with torch.no_grad():
+        # with torch.no_grad():
+        with torch.set_grad_enabled(True):
             pts_feature, grad_x, grad_y = \
                 self.get_result(feature_maps, pts, cam_intrinsics, cam_extrinsics)
         # torch.cuda.synchronize()
@@ -242,7 +247,7 @@ class FeatureGradFetcher(nn.Module):
         pts_feature_grad = torch.stack((grad_x, grad_y), dim=-1)
         # torch.cuda.synchronize()
         # print('    stack: ', time.time() - begin_t)
-        return pts_feature.detach(), pts_feature_grad.detach()
+        return pts_feature, pts_feature_grad.detach()
 
 
 class PointGrad(nn.Module):
@@ -262,7 +267,8 @@ class PointGrad(nn.Module):
         curr_batch_size = batch_size * num_view
         cam_intrinsics = cam_intrinsics.view(curr_batch_size, 3, 3)
 
-        with torch.no_grad():
+        # with torch.no_grad():
+        with torch.set_grad_enabled(True):
             num_pts = pts.size(2)
             pts_expand = pts.unsqueeze(1).contiguous().expand(batch_size, num_view, 3, num_pts) \
                 .contiguous().view(curr_batch_size, 3, num_pts)

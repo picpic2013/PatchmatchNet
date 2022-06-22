@@ -1,8 +1,16 @@
 import cv2
-import open3d as o3d
+# import open3d as o3d
 import os
 import cv2 as cv
 import numpy as np
+
+import os
+import sys
+import pathlib
+parentFolder = pathlib.Path(__file__).parent.parent.resolve()
+parentFolder = os.path.abspath(parentFolder)
+sys.path.append(parentFolder)
+
 from fastmvsnet.utils.io import *
 from propagation import warping_propagation
 
@@ -63,7 +71,8 @@ depth_threshold = 0.01
 absolute_depth = False
 num_consistent = 3
 device = 'cpu'#'cuda:1'
-flow = 'init'
+# flow = 'init'
+flow = 'flow3'
 scene = 'lab'
 config = 'lab_crop'
 
@@ -75,8 +84,8 @@ pcd_path = 'pcd/pcd_{}.ply'.format(scene)
 convert2npy(rgbd_cam_path, flow, scene, config)
 if is_propagation is False:
     depth_map_fusion(rgbd_cam_path, pcd_path, device, pixel_threshold, depth_threshold, absolute_depth, num_consistent)
-    pcd = o3d.io.read_point_cloud(pcd_path)
-    o3d.visualization.draw_geometries([pcd])
+    # pcd = o3d.io.read_point_cloud(pcd_path)
+    # o3d.visualization.draw_geometries([pcd])
 else:
     depth_map_fusion(rgbd_cam_path, warped_rgbd_cam_path, device, pixel_threshold, depth_threshold, absolute_depth, num_consistent, True)
     warping_propagation(rgbd_raw=rgbd_cam_path, rgbd_checked=warped_rgbd_cam_path, output=propagated_rgbd_cam_path)

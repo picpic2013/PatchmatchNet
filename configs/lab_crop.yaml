@@ -19,8 +19,10 @@ MODEL:
     IMG_SCALES: (0.25, 0.5)
     INTER_SCALES: (0.75, 0.375)
   TEST:
-    IMG_SCALES: (0.25, 0.25, 0.25, 1.0, 1.0)
-    INTER_SCALES: (0.75, 0.15, 0.15, 0.15, 0.15)
+    # IMG_SCALES: (0.25, 0.25, 0.25, 1.0, 1.0)
+    IMG_SCALES: (0.25, 0.5, 1.0)
+    # INTER_SCALES: (0.75, 0.15, 0.15, 0.15, 0.15)
+    INTER_SCALES: (0.75, 0.15, 0.15)
 SCHEDULER:
   TYPE: "StepLR"
   INIT_EPOCH: 4
