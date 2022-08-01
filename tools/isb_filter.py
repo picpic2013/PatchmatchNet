@@ -65,7 +65,7 @@ class ISB_Filter:
         rows = resolution[1]
         if candidate_count == 1:
             if SR_resolution == -1:
-                self.scale_count = int(min(math.log2(cols), math.log2(rows)) - 1) - 3
+                self.scale_count = int(min(math.log2(cols), math.log2(rows)) - 1) - 1 #- 3 # control the propagation area
             else:
                 self.scale_count = int(math.log2(SR_resolution[0] / resolution[0])) + 1
                 cols = SR_resolution[0]

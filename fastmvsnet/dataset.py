@@ -158,6 +158,7 @@ class DTU_Test_Set(Dataset):
     # test_set = [1, 4, 9, 10, 11, 12, 13, 15, 23, 24, 29, 32, 33, 34, 48, 49, 62, 75, 77,
     #             110, 114, 118]
     test_set = [1]
+    # test_set = range(1,501)
     test_lighting_set = [3]
 
     mean = torch.tensor([1.97145182, -1.52387525, 651.07223895])
@@ -198,7 +199,8 @@ class DTU_Test_Set(Dataset):
             image_folder = osp.join(self.root_dir, "Rectified/scan{}".format(ind))
             cam_folder = osp.join(self.root_dir, "Cameras")
             depth_folder = osp.join(self.depth_folder, "scan{}".format(ind))
-
+            src_num_in_pair = int(self.cluster_list[2])
+            inx_step = 2 * src_num_in_pair + 2
             for lighting_ind in lighting_set:
                 # for each reference image
                 for p in range(0, int(self.cluster_list[0])):
@@ -210,7 +212,7 @@ class DTU_Test_Set(Dataset):
 
                     # ref image
                     # ref_index = int(self.cluster_list[22 * p + 1])
-                    ref_index = int(self.cluster_list[10 * p + 1])
+                    ref_index = int(self.cluster_list[inx_step * p + 1])
                     ref_image_path = osp.join(
                         image_folder, "rect_{:03d}_{}_r5000.png".format(ref_index + 1, lighting_ind))
                     ref_cam_path = osp.join(cam_folder, "{:08d}_cam.txt".format(ref_index))
@@ -223,7 +225,7 @@ class DTU_Test_Set(Dataset):
                     # view images
                     for view in range(self.num_view - 1):
                         # view_index = int(self.cluster_list[22 * p + 2 * view + 3])
-                        view_index = int(self.cluster_list[10 * p + 2 * view + 3])
+                        view_index = int(self.cluster_list[inx_step * p + 2 * view + 3])
                         view_image_path = osp.join(
                             image_folder, "rect_{:03d}_{}_r5000.png".format(view_index + 1, lighting_ind))
                         view_cam_path = osp.join(cam_folder, "{:08d}_cam.txt".format(view_index))
@@ -308,6 +310,7 @@ class DTU_Test_Set(Dataset):
             "gt_depth_img": ref_depth,
             "depth_list": depth_list,
             "ref_img_path": paths["view_image_paths"][0],
+            "src_img_path": paths["view_image_paths"][1:],
             "ref_img": ref_image,
             "mean": self.mean,
             "std": self.std,

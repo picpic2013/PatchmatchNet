@@ -6,12 +6,12 @@ DATA:
   VAL:
     ROOT_DIR: "data/dtu"
   TEST:
-    ROOT_DIR: "/data/FastMVSNet/lab"
+    ROOT_DIR: "/data/FastMVSNet/dtu"
     NUM_VIEW: 5
-    IMG_HEIGHT: 672
-    IMG_WIDTH: 384
+    IMG_HEIGHT: 480
+    IMG_WIDTH: 640
     NUM_VIRTUAL_PLANE: 32
-    INTER_SCALE: 0.26
+    INTER_SCALE: 6.39
   NUM_WORKERS: 16
 MODEL:
   EDGE_CHANNELS: (32, 32, 64)
@@ -19,10 +19,8 @@ MODEL:
     IMG_SCALES: (0.25, 0.5)
     INTER_SCALES: (0.75, 0.375)
   TEST:
-    # IMG_SCALES: (0.25, 0.25, 0.25, 1.0, 1.0)
 #    IMG_SCALES: (0.25, 0.5, 1.0)
     IMG_SCALES: (1.0,)
-    # INTER_SCALES: (0.75, 0.15, 0.15, 0.15, 0.15)
 #    INTER_SCALES: (0.75, 0.15, 0.15)
     INTER_SCALES: (0.15,)
 SCHEDULER:

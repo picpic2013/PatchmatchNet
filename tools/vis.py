@@ -11,7 +11,7 @@ from g3d_utils import *
 
 def fastMVSnet_vis_crop():
     for ref_idx in [0, 1, 2, 3, 4]:
-        for flow in ['init']:
+        for flow in ['flow1']:
             img, depth, intr, extr = {}, {}, {}, {}
             depth_tmp = load_pfm('/data/FastMVSNet/lab/lab_crop/scan1/0000000{}_{}.pfm'.format(ref_idx, flow))
             depth_tmp = depth_tmp[0]
