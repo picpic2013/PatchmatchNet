@@ -11,7 +11,7 @@ from torch.autograd.functional import hessian
 import sys
 sys.path.append('/home/wjk/workspace/PyProject/FastMVSNet/fastmvsnet')
 from picutils import PICTimer
-
+from picutils import PICTimer, MyPerspectiveCamera, MyPosture, enhancedBatchWarping, getWarppingLine
 from fastmvsnet.networks import *
 from fastmvsnet.functions.functions import get_pixel_grids, get_propability_map
 from fastmvsnet.utils.feature_fetcher import FeatureFetcher, FeatureGradFetcher, PointGrad, ProjectUVFetcher
@@ -27,6 +27,10 @@ def vis_tensor(img, title, wait=False):
         cv2.waitKey()
     else:
         cv2.waitKey(30)
+
+def normfun(x, mu, sigma):
+    pdf = np.exp(-((x - mu)**2)/(2*sigma**2)) / (sigma * np.sqrt(2*np.pi))
+    return pdf
 
 class FastMVSNet(nn.Module):
     def __init__(self,
@@ -57,6 +61,9 @@ class FastMVSNet(nn.Module):
         t = cam_extrinsic[:, :, :3, 3].unsqueeze(-1)
         R_inv = torch.inverse(R)
         cam_intrinsic = cam_params_list[:, :, 1, :3, :3].clone()
+
+        cams = [MyPerspectiveCamera(kk, MyPosture.fromMat33(rr, tt), *img_list.shape[-2:], device=img_list.device, dtype=img_list.dtype) for
+                rr, tt, kk in zip(R[0, ...], t[0, ...], cam_intrinsic[0, ...])]
 
         if isTest:
             cam_intrinsic[:, :, :2, :3] = cam_intrinsic[:, :, :2, :3] / 4.0
@@ -171,7 +178,7 @@ class FastMVSNet(nn.Module):
                 feature_pyramids[conv] = []
             for i in range(num_view):
                 curr_img = img_list[:, i, :, :, :]
-                curr_feature_pyramid = self.flow_img_conv(curr_img)
+                curr_feature_pyramid = self.coarse_img_conv(curr_img)
                 for conv in chosen_conv:
                     feature_pyramids[conv].append(curr_feature_pyramid[conv])
 
@@ -218,6 +225,16 @@ class FastMVSNet(nn.Module):
                 uv = torch.matmul(torch.inverse(ref_cam_intrinsic).unsqueeze(1),
                                 feature_map_indices_grid)  # (B, 1, 3, FH*FW)
 
+                all_features = []
+                for conv in chosen_conv:
+                    curr_feature = feature_pyramids[conv]
+                    c, h, w = list(curr_feature.size())[2:]
+                    curr_feature = curr_feature.contiguous().view(-1, c, h, w)
+                    curr_feature = F.interpolate(curr_feature, (flow_height, flow_width), mode="bilinear")
+                    curr_feature = curr_feature.contiguous().view(batch_size, num_view, c, flow_height, flow_width)
+                    all_features.append(curr_feature)
+                all_features = torch.cat(all_features, dim=2)
+
                 def warping_grident(estimated_depth_map):
                     interval_depth_map = estimated_depth_map
                     cam_points = (uv * interval_depth_map.view(batch_size, 1, 1, -1))
@@ -237,17 +254,17 @@ class FastMVSNet(nn.Module):
                     torch.cuda.synchronize()
                     timer_refine.showTime('d_d')
 
-                    all_features = []
-                    for conv in chosen_conv:
-                        curr_feature = feature_pyramids[conv]
-                        c, h, w = list(curr_feature.size())[2:]
-                        curr_feature = curr_feature.contiguous().view(-1, c, h, w)
-                        curr_feature = F.interpolate(curr_feature, (flow_height, flow_width), mode="bilinear")
-                        curr_feature = curr_feature.contiguous().view(batch_size, num_view, c, flow_height, flow_width)
-
-                        all_features.append(curr_feature)
-
-                    all_features = torch.cat(all_features, dim=2)
+                    # all_features = []
+                    # for conv in chosen_conv:
+                    #     curr_feature = feature_pyramids[conv]
+                    #     c, h, w = list(curr_feature.size())[2:]
+                    #     curr_feature = curr_feature.contiguous().view(-1, c, h, w)
+                    #     curr_feature = F.interpolate(curr_feature, (flow_height, flow_width), mode="bilinear")
+                    #     curr_feature = curr_feature.contiguous().view(batch_size, num_view, c, flow_height, flow_width)
+                    #
+                    #     all_features.append(curr_feature)
+                    #
+                    # all_features = torch.cat(all_features, dim=2)
                     if isTest:
                         point_features, point_features_grad = \
                             self.feature_grad_fetcher.test_forward(all_features, world_points, cam_intrinsic, cam_extrinsic)
@@ -278,39 +295,22 @@ class FastMVSNet(nn.Module):
                     cam_points = (uv * interval_depth_map.view(batch_size, 1, 1, -1))
                     world_points = torch.matmul(R_inv[:, 0:1, :, :], cam_points - t[:, 0:1, :, :]).transpose(1, 2) \
                         .contiguous().view(batch_size, 3, -1)  # (B, 3, D*FH*FW)
-                    # torch.cuda.synchronize()
-                    # timer_refine.showTime('mapping')
 
-                    grad_pts = self.point_grad_fetcher(world_points, cam_intrinsic, cam_extrinsic)
-
-                    R_tar_ref = torch.bmm(R.view(batch_size * num_view, 3, 3),
-                                        R_inv[:, 0:1, :, :].repeat(1, num_view, 1, 1).view(batch_size * num_view, 3, 3))
-
-                    R_tar_ref = R_tar_ref.view(batch_size, num_view, 3, 3)
-                    d_pts_d_d = uv.unsqueeze(-1).permute(0, 1, 3, 2, 4).contiguous().repeat(1, num_view, 1, 1, 1)
-                    d_pts_d_d = R_tar_ref.unsqueeze(2) @ d_pts_d_d
-                    d_uv_d_d = torch.bmm(grad_pts.view(-1, 2, 3), d_pts_d_d.view(-1, 3, 1)).view(batch_size, num_view, 1,
-                                                                                                -1, 2, 1)
-                    torch.cuda.synchronize()
-                    timer_refine.showTime('d_d')
-
-                    all_features = []
-                    for conv in chosen_conv:
-                        curr_feature = feature_pyramids[conv]
-                        c, h, w = list(curr_feature.size())[2:]
-                        curr_feature = curr_feature.contiguous().view(-1, c, h, w)
-                        curr_feature = F.interpolate(curr_feature, (flow_height, flow_width), mode="bilinear")
-                        curr_feature = curr_feature.contiguous().view(batch_size, num_view, c, flow_height, flow_width)
-
-                        all_features.append(curr_feature)
-
-                    all_features = torch.cat(all_features, dim=2)
+                    # all_features = []
+                    # for conv in chosen_conv:
+                    #     curr_feature = feature_pyramids[conv]
+                    #     c, h, w = list(curr_feature.size())[2:]
+                    #     curr_feature = curr_feature.contiguous().view(-1, c, h, w)
+                    #     curr_feature = F.interpolate(curr_feature, (flow_height, flow_width), mode="bilinear")
+                    #     curr_feature = curr_feature.contiguous().view(batch_size, num_view, c, flow_height, flow_width)
+                    #
+                    #     all_features.append(curr_feature)
+                    #
+                    # all_features = torch.cat(all_features, dim=2)
                     # #replace feature with rgb
                     # all_features = F.interpolate(img_list.squeeze(0), (flow_height, flow_width), mode="bilinear").unsqueeze(0)
                     # torch.cuda.synchronize()
                     # timer_refine.showTime('feature resize')
-
-                    # all_features
 
                     if isTest:
                         point_features, point_features_grad = \
@@ -318,55 +318,91 @@ class FastMVSNet(nn.Module):
                     else:
                         point_features, point_features_grad = \
                             self.feature_grad_fetcher(all_features, world_points, cam_intrinsic, cam_extrinsic)
-                    # torch.cuda.synchronize()
-                    # timer_refine.showTime('warping and d_uv')
-                    c = all_features.size(2)
-                    d_uv_d_d_tmp = d_uv_d_d.repeat(1, 1, c, 1, 1, 1)
-                    # print("d_uv_d_d tmp size:", d_uv_d_d_tmp.size())
-
-                    # resid = point_features[:, 1:, ...] - point_features[:, 0:1, ...]
-                    # resIdLoss = resid.abs().mean()
-                    # resIdLoss.backward()
-                    # J = estimated_depth_map.grad
-
-                    J = point_features_grad.view(-1, 1, 2) @ d_uv_d_d_tmp.view(-1, 2, 1)
-                    # print(point_features_grad.view(-1, 1, 2).size(), d_uv_d_d_tmp.view(-1, 2, 1).size())
-                    J = J.view(batch_size, num_view, c, -1, 1)[:, 1:, ...].contiguous()\
-                        .permute(0, 3, 1, 2, 4).contiguous().view(-1, c * (num_view - 1), 1)
-                    # print(J.size())
-                    # torch.cuda.synchronize()
-                    # timer_refine.showTime('compute jacobi')
 
                     resid = point_features[:, 1:, ...] - point_features[:, 0:1, ...]
-                    first_resid = torch.sum(torch.abs(resid), dim=(1, 2))
-                    # # print(resid.size())
                     resid = resid.permute(0, 3, 1, 2).contiguous().view(-1, c * (num_view - 1), 1)
-                    # torch.cuda.synchronize()
-                    # timer_refine.showTime('compute loss')
 
-                    # # raw
-                    # J_t = torch.transpose(J, 1, 2)
-                    # H = J_t @ J
-                    # b = -J_t @ resid
-                    # delta = b / (H + 1e-6)
-
-                    # torch auto grad
-                    # torch.cuda.synchronize()
-                    # timer_refine.showTime('loss_begin')
                     # resIdLoss = resid.abs().mean()
                     resIdLoss = (resid ** 2).sum()
-                    # torch.cuda.synchronize()
-                    # timer_refine.showTime('loss_end')
                     return resIdLoss
-                    # return delta
+
+                def warping_fusion(feature_list, refDepth, weights, line):
+                    warping_imgs = enhancedBatchWarping([cams[0]], [cams[1:]],
+                                                        refDepth[:, :, :, :],
+                                                        feature_list[:, 1:, :, :, :], lineParam=line)
+                    fused = warping_imgs * weights
+                    is_empty = fused != 0
+                    weights_sum = torch.sum(is_empty * weights, dim=2)
+                    fused_img = torch.sum(fused, dim=2) / (weights_sum + 1e-9)
+
+                    # cv2.imwrite("../outputs/warping/ref.jpg", img_list[0, 0, :, :, :].permute(1, 2, 0).cpu().detach().numpy() * 255)
+                    # for batch in fused_img[:1]:
+                    #     for idx, view in enumerate(batch):
+                    #             cv2.imwrite("../outputs/warping/v{}.jpg".format(idx), view.cpu().detach().permute(1, 2, 0).numpy() * 255)
+
+                    loss = ((feature_list[:, 0:1, :, :, :] - fused_img) ** 2).sum()
+                    # loss = ((feature_list[:, 0:1, :, :, :] - warping_imgs.squeeze(2)) ** 2).sum()
+                    return loss
 
                 raw_estimated_depth_map = estimated_depth_map.detach().clone()
                 estimated_depth_map = estimated_depth_map.detach().clone()
                 estimated_depth_map.requires_grad = True
                 optimizer = torch.optim.Adam([estimated_depth_map], lr=1e-4)
 
-                for _ in range(5):
+                for _ in range(1):
                     optimizer.zero_grad()
+
+                    # if _ % 5 == 0:
+                    #     print(1)
+
+                    # def fusion_newton_color(estimated_depth_map):
+                    #     ### color fusion
+                    #     device = img_list.device
+                    #     data_type = img_list.dtype
+                    #     n_center = 25
+                    #     n_plane = 2 * n_center + 1
+                    #     maxDeltaD = .03
+                    #     minDeltaD = -.03
+                    #     deltaD = torch.linspace(minDeltaD, maxDeltaD, n_plane, dtype=torch.float32, device=device)
+                    #     refDepth = estimated_depth_map.repeat(1, n_plane, 1, 1)
+                    #     refDepth = refDepth + deltaD.view(1, n_plane, 1, 1)
+                    #     weights = [normfun(x=_, mu=n_center, sigma=20) for _ in range(n_plane)]
+                    #     weights = torch.tensor(weights, dtype=data_type).view(1, 1, -1, 1, 1, 1).to(device)
+                    #     line = getWarppingLine([cams[0]], [cams[1:]])
+                    #     resIdLoss = warping_fusion(img_list, refDepth, weights, line)
+                    #     grad = torch.autograd.grad(resIdLoss, estimated_depth_map, retain_graph=True, create_graph=True)[0]
+                    #     H = torch.autograd.grad(grad, estimated_depth_map, retain_graph=True,
+                    #                             grad_outputs=torch.ones_like(grad))[0]
+                    #     delta = -grad / (H + 1e-10)
+                    #     estimated_depth_map = estimated_depth_map + delta.detach()
+                    #     return estimated_depth_map
+                    # estimated_depth_map = fusion_newton_color(estimated_depth_map)
+
+                    ### feature fusion
+                    def fusion_newton_feature(estimated_depth_map, sigma):
+                        device = img_list.device
+                        data_type = img_list.dtype
+                        n_center = 5
+                        n_plane = 2 * n_center + 1
+                        maxDeltaD = 15#.03
+                        minDeltaD = -15#-.03
+                        deltaD = torch.linspace(minDeltaD, maxDeltaD, n_plane, dtype=torch.float32, device=device)
+                        refDepth = estimated_depth_map.repeat(1, n_plane, 1, 1)
+                        refDepth = refDepth + deltaD.view(1, n_plane, 1, 1)
+                        weights = [normfun(x=_, mu=n_center, sigma=sigma) for _ in range(n_plane)]
+                        weights = torch.tensor(weights, dtype=data_type).view(1, 1, -1, 1, 1, 1).to(device)
+                        # weights = torch.ones(1, 1, 1, 1, 1, 1,  dtype=torch.float32, device=device)
+                        line = getWarppingLine([cams[0]], [cams[1:]])
+                        resIdLoss = warping_fusion(all_features, refDepth, weights, line)
+                        grad = torch.autograd.grad(resIdLoss, estimated_depth_map, retain_graph=True, create_graph=True)[0]
+                        H = torch.autograd.grad(grad, estimated_depth_map, retain_graph=True,
+                                                grad_outputs=torch.ones_like(grad))[0]
+                        delta = -grad / (H + 1e-10)
+                        estimated_depth_map = estimated_depth_map + delta.detach()
+                        return estimated_depth_map
+                    # estimated_depth_map = fusion_newton_feature(estimated_depth_map, 20 / (_ + 1))
+                    estimated_depth_map = fusion_newton_feature(estimated_depth_map, 0.8)
+
 
                     ### one order: Newton Method
                     # J, resid = warping_grident(estimated_depth_map)
@@ -393,19 +429,15 @@ class FastMVSNet(nn.Module):
                     # _, _, h, w = estimated_depth_map.size()
                     # estimated_depth_map = estimated_depth_map + delta.view(-1, 1, h, w)
 
-                    ### two order: compute hession by AutoGrad
-                    resIdLoss = warping_loss(estimated_depth_map)
-                    torch.cuda.synchronize()
-                    t0 = time.time()
-                    grad = torch.autograd.grad(resIdLoss, estimated_depth_map, retain_graph=True, create_graph=True)[0]
-                    torch.cuda.synchronize()
-                    t1 = time.time()
-                    H = torch.autograd.grad(grad, estimated_depth_map, retain_graph=True, grad_outputs=torch.ones_like(grad))[0]
-                    torch.cuda.synchronize()
-                    t2 = time.time()
-                    print('J:{},H:{}'.format(t1-t0, t2-t1))
-                    delta = -grad / (H + 1e-10)
-                    estimated_depth_map = estimated_depth_map + delta
+                    # ### two order: compute hession by AutoGrad
+                    # def AutoGrad_two_order(estimated_depth_map):
+                    #     resIdLoss = warping_loss(estimated_depth_map)
+                    #     grad = torch.autograd.grad(resIdLoss, estimated_depth_map, retain_graph=True, create_graph=True)[0]
+                    #     H = torch.autograd.grad(grad, estimated_depth_map, retain_graph=True, grad_outputs=torch.ones_like(grad))[0]
+                    #     delta = -grad / (H + 1e-10)
+                    #     estimated_depth_map = estimated_depth_map + delta.detach()
+                    #     return estimated_depth_map
+                    # estimated_depth_map = AutoGrad_two_order(estimated_depth_map)
 
                     ### two order: use L-BFGS by AutoGrad
                     # resIdLoss.backward()

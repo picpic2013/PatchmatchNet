@@ -43,6 +43,40 @@ def convert2npy(output_path, flow, scene, config, frame, num_view):
     result['extr'] = extr
     np.save(output_path, result)
 
+def convert2npy_upsample(output_path, flow, scene, config, frame, num_view):
+    img, depth, intr, extr = {}, {}, {}, {}
+    result = {'rgb': {}, 'depth': {}, 'intr': {}, 'extr': {}}
+    for ref_idx in range(num_view):
+        rgb_tmp = cv2.imread('/data/FastMVSNet/{}/{}/{}/0000000{}.jpg'.format(scene, config, frame, ref_idx))
+        img[ref_idx] = rgb_tmp
+        H, W, C = rgb_tmp.shape
+
+        depth_tmp = load_pfm('/data/FastMVSNet/{}/{}/{}/0000000{}_{}.pfm'.format(scene, config, frame, ref_idx, flow))
+        depth_tmp = depth_tmp[0]
+        H_curr, W_curr = depth_tmp.shape
+        depth_tmp = cv2.resize(depth_tmp, [W, H])
+        prob_tmp = load_pfm('/data/FastMVSNet/{}/{}/{}/0000000{}_init_prob.pfm'.format(scene, config, frame, ref_idx))
+        prob_tmp = prob_tmp[0]
+        prob_tmp = cv2.resize(prob_tmp, [W, H])
+        depth_tmp[prob_tmp < 0.55] = 0
+
+        depth[ref_idx] = depth_tmp
+        cam = load_cam_dtu(open('/data/FastMVSNet/{}/{}/{}/cam_0000000{}_{}.txt'.format(scene, config, frame, ref_idx, flow)))
+        extrinsic = cam[0:4][0:4][0]
+        intrinsic = cam[0:4][0:4][1]
+        intrinsic = intrinsic[0:3, 0:3]
+
+        intrinsic[0:1, :] *= W / W_curr
+        intrinsic[1:2, :] *= H / H_curr
+
+        intr[ref_idx] = intrinsic
+        extr[ref_idx] = extrinsic
+
+    result['rgb'] = img
+    result['depth'] = depth
+    result['intr'] = intr
+    result['extr'] = extr
+    np.save(output_path, result)
 
 def depth_map_fusion(input_path, output_path, device, pixel_thre, depth_thre, absolute_depth, view_thre, is_warping=False):
     if is_warping is False:
@@ -61,26 +95,26 @@ def depth_map_fusion(input_path, output_path, device, pixel_thre, depth_thre, ab
 
     return
 
-is_propagation = True#False#
+is_propagation = False#True#
 pixel_threshold = 1.0
-depth_threshold = 0.01#10#
+depth_threshold = 10#0.01#
 absolute_depth = False
-num_consistent = 2#3
-device = 'cuda:0'#'cpu'#
-flow = 'flow3'
-scene = 'teaRoom'#'lab'#'dtu'##'lab'#'gym'
-config = 'teaRoom'#'lab_crop'#'dtu_5views'##'lab_crop'#'gym'
-frame = 'scan1'
-maxd=1.6#1000#
-mind=0.6#1.0#400#
-num_view = 5#10#
+num_consistent = 3#2#
+device = 'cpu'#'cuda:0'#
+flow = 'flow1'
+scene = 'dtu'#'lab'#'teaRoom'##'gym'
+config = 'dtu_5views'#'lab_crop'#'teaRoom'#'gym'
+frame = 'scan6'
+maxd=1000#1.6#
+mind=400#1.0#0.6#
+num_view = 10#5#
 
 rgbd_cam_path = 'rgbd/rgbd_{}.npy'.format(scene)
 warped_rgbd_cam_path = 'rgbd/rgbd_{}_warped.npy'.format(scene)
 propagated_rgbd_cam_path = 'rgbd/rgbd_{}_propagated.npy'.format(scene)
 pcd_path = 'pcd/pcd_{}.ply'.format(scene)
 
-convert2npy(rgbd_cam_path, flow, scene, config, frame, num_view)
+convert2npy_upsample(rgbd_cam_path, flow, scene, config, frame, num_view)
 if is_propagation is False:
     depth_map_fusion(rgbd_cam_path, pcd_path, device, pixel_threshold, depth_threshold, absolute_depth, num_consistent)
     pcd = o3d.io.read_point_cloud(pcd_path)

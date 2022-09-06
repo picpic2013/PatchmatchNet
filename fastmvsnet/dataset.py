@@ -157,7 +157,7 @@ class DTU_Train_Val_Set(Dataset):
 class DTU_Test_Set(Dataset):
     # test_set = [1, 4, 9, 10, 11, 12, 13, 15, 23, 24, 29, 32, 33, 34, 48, 49, 62, 75, 77,
     #             110, 114, 118]
-    test_set = [1]
+    test_set = [6]
     # test_set = range(1,501)
     test_lighting_set = [3]
 

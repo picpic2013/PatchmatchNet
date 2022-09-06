@@ -21,7 +21,7 @@ parse.add_argument("-d", "--data_path", default="/data/FastMVSNet/SampleSet/MVS_
 parse.add_argument("-r", "--results_path", default="../../Results", type=str, help="Output results path where the output evaluation metrics will be stored.")
 parse.add_argument("-l", "--light_setting", default="l3", type=str, help="DTU light setting.")
 parse.add_argument("-p", "--representation", default="Points", type=str, help="Data representation (Points/Surface).")
-parse.add_argument("-e", "--eval_list", default="1", type=str, help="Scene evaluation list following the format '#,#,#,#' (e.x. '1,9,23,77,114') COMMA-SEPARATED, NO-SPACES.")
+parse.add_argument("-e", "--eval_list", default="6", type=str, help="Scene evaluation list following the format '#,#,#,#' (e.x. '1,9,23,77,114') COMMA-SEPARATED, NO-SPACES.")
 
 ARGS = parse.parse_args()
 
